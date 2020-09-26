@@ -17,8 +17,20 @@ mkdir lego-playground
 cd lego-playground
 git clone https://github.com/janvrany/bricknil.git
 git clone https://github.com/janvrany/controlminus.git
-PYTHONPATH=$(pwd)/bricknil:$(pwd)/controlminus python3 controlminus/vehicle.py
+cd controlminus
+virtualenv --system-site-packages --prompt "[control-] " -v .venv
+. .venv/bin/activate
+pip install -e ../bricknil
 ```
+
+## Running
+
+```
+cd lego-playground/controlminus
+. .venv/bin/activate
+./vehicle.py
+```
+
 
 ## Contributing
 

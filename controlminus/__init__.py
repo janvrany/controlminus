@@ -18,45 +18,57 @@
 # CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 # TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-from types import MethodType as __bind
-from inspect import iscoroutinefunction as __iscoroutine
 
-def __wrap(old, new):
-    setattr(old.__self__, old.__name__, __bind(new, old.__self__))
+from asyncio import _set_running_loop
+from glibcoro import GLibEventLoop, GLibEventLoopPolicy
+
+class GTKEventLoop(GLibEventLoop):
+    def run_until_complete(self, future):
+        raise Exception("Not supported - use be_running() to mark the loop as running followed by create_task()")
+
+    def run_forever(self, future):
+        raise Exception("Not supported - use be_running() to mark the loop as running")
+
+    def be_running(self) :
+        self._check_closed()
+        assert self._gloop == None, "loop already running"        
+        self._gloop = object()
+        _set_running_loop(self)
+    
+    def is_running(self):
+        return self._gloop != None
+
+    def stop(self):
+        raise Exception("Not supported")      
 
 
-def before(bound_method):
-    def decorator(func):
-        if __iscoroutine(bound_method):
-            async def wrapper(recv, *args):
-                if __iscoroutine(func):
-                    await func(recv, *args)
-                else:
-                    func(recv, *args)
-                return await bound_method(*args)
-            __wrap(bound_method, wrapper)
-        else:
-            def wrapper(recv, *args):
-                func(recv, *args)
-                return bound_method(*args)
-            __wrap(bound_method, wrapper)
-    return decorator
+class GTKEventLoopPolicy(GLibEventLoopPolicy):
+    def new_event_loop(self) :
+        self._check_is_main_thread()
+        return GTKEventLoop()
 
-def after(bound_method):
-    def decorator(func):
-        if __iscoroutine(bound_method):
-            async def wrapper(recv, *args):
-                retval = await bound_method(*args)
-                if __iscoroutine(func):
-                    await func(recv, *args)
-                else:
-                    func(recv, *args)
-                return retval
-            __wrap(bound_method, wrapper)
-        else:
-            def wrapper(recv, *args):
-                retval = bound_method(*args)
-                func(recv, *args)
-                return retval
-            __wrap(bound_method, wrapper)
-    return decorator
+
+
+if __name__ == '__main__':    
+    import asyncio
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk
+
+    async def tick_tack_loop():
+        async def tick_tack():
+            print("tick")
+            await asyncio.sleep(1)
+            print("tack")
+            await asyncio.sleep(1)
+        while True:
+            await tick_tack()
+
+    asyncio.set_event_loop_policy(GTKEventLoopPolicy())
+    asyncio.get_event_loop().create_task(tick_tack_loop())
+    asyncio.get_event_loop().be_running()
+
+    win = Gtk.Window()
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    Gtk.main()
