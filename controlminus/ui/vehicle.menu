@@ -7,6 +7,10 @@
         <attribute name="label" translatable="yes">_Calibrate steering</attribute>
         <attribute name="accel">&lt;Primary&gt;q</attribute>
       </item>
+      <item>
+        <attribute name="action">app.debug</attribute>
+        <attribute name="label" translatable="yes">_Debug</attribute>
+      </item>
     </section>
     <section>
       <!--

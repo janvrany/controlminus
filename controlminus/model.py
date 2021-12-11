@@ -30,10 +30,10 @@ from bricknil.sensor.sensor import PoweredUpHubIMUPosition, PoweredUpHubIMUAccel
 
 @attach(CPlusXLMotor, name='motor_a', port=0, capabilities=[('sense_speed', 5), ('sense_load', 5), ('sense_power', 5)])
 @attach(CPlusXLMotor, name='motor_b', port=1, capabilities=[('sense_speed', 5), ('sense_load', 5), ('sense_power', 5)])
-@attach(CPlusLMotor, name='steering', port=2, capabilities=[('sense_pos', 1), ('sense_speed', 5), ('sense_load', 5), ('sense_power', 5)])
+@attach(CPlusLMotor, name='steering', port=2, capabilities=[('sense_pos', 5), ('sense_speed', 5), ('sense_load', 5), ('sense_power', 5)])
 @attach(PoweredUpHubIMUAccelerometer, name='accel', capabilities=[('sense_grv', 5)])
 @attach(PoweredUpHubIMUGyro, name='gyro', capabilities=[('sense_rot', 5)])
-@attach(PoweredUpHubIMUPosition, name='position', port=99, capabilities=[('sense_pos', 2)])
+@attach(PoweredUpHubIMUPosition, name='position', port=99, capabilities=[('sense_pos', 5)])
 @attach(VoltageSensor, name='voltage', capabilities=[('sense_l', 10)])
 @attach(CurrentSensor, name='current', capabilities=[('sense_l', 10)])
 class Vehicle(CPlusHub):
@@ -64,7 +64,7 @@ class Vehicle(CPlusHub):
     async def steering_change(self):
         self.steering_angle = self.steering.sense_pos
         # steering_speed = self.steering.sense_speed
-        # print("I: steering pos: %s, target %s" % (self.steering_angle, self.steering_target))
+        # self.message_info(": steering pos: %s, target %s" % (self.steering_angle, self.steering_target))
         # if self.steering_calibration_in_process:
         #     return
         # diff = 0
@@ -87,13 +87,13 @@ class Vehicle(CPlusHub):
         await self.steering.rotate(180, 50, 100)
         await wait_until_steering_stop()
         self.steering_angle_max = self.steering_angle
-        print("I: steering_calibrate - right stop: %s" % self.steering_angle_max)
+        self.message_info(": steering_calibrate - right stop: %s" % self.steering_angle_max)
 
         # await self.steering.set_speed(-60)
         await self.steering.rotate(180,-50, 100)
         await wait_until_steering_stop()
         self.steering_angle_min = self.steering_angle
-        print("I: steering_calibrate - left stop: %s" % self.steering_angle_min)
+        self.message_info(": steering_calibrate - left stop: %s" % self.steering_angle_min)
 
         zero = int( (self.steering_angle_max + self.steering_angle_min) / 2)
         half = int( abs(self.steering_angle_max - self.steering_angle_min) / 2 )
@@ -105,7 +105,7 @@ class Vehicle(CPlusHub):
         self.steering_angle_min = zero - half
         self.steering_angle_max = zero + half
 
-        print("I: steering_calibrate 1: %s (zero) %s (min) %s (max)" % (zero, self.steering_angle_min, self.steering_angle_max))
+        self.message_info(": steering_calibrate 1: %s (zero) %s (min) %s (max)" % (zero, self.steering_angle_min, self.steering_angle_max))
 
         await self.steering.set_pos(zero, speed=50)
         await sleep(2)
@@ -115,7 +115,7 @@ class Vehicle(CPlusHub):
         self.steering_angle_min = -half
         self.steering_angle_max = +half
         self.steering_target = 0
-        print("I: steering_calibrate 2: %s (zero) %s (min) %s (max)" % (zero, self.steering_angle_min, self.steering_angle_max))
+        self.message_info(": steering_calibrate 2: %s (zero) %s (min) %s (max)" % (zero, self.steering_angle_min, self.steering_angle_max))
 
         await sleep(2)
         self.steering_calibration_in_process = False
@@ -123,7 +123,7 @@ class Vehicle(CPlusHub):
     async def steer(self, pct, speed=60):
         if abs(pct) < 10:
             pct = 0
-        
+
         zero = int((self.steering_angle_min + self.steering_angle_max) / 2)
         half = abs(self.steering_angle_max - zero)
         new_target = zero + int((pct / 100) * half)
@@ -133,9 +133,11 @@ class Vehicle(CPlusHub):
         self.steering_target = zero + int((pct / 100) * half)
         #breakpoint()
         diff = abs(self.steering_target - self.steering.sense_pos)
-        speed = int((diff / half) * speed)
+        #speed = int((diff / half) * speed)
+        speed = 50
 
-        print("I: steering_target = %d, speed = %d" % (self.steering_target, speed))
+        #self.message_info("steering_target = %d, speed = %d" % (self.steering_target, speed))
+        print("I:steering_target = %d, speed = %d" % (self.steering_target, speed))
 
         await self.steering.set_pos(self.steering_target, speed=speed, max_power=100)
 
@@ -146,22 +148,20 @@ class Vehicle(CPlusHub):
         """
         #await self.motor_a.set_speed(-1*pct)
         #await self.motor_b.set_speed(-1*pct)
+        self.message_info(": speed = %d" % pct)
         if abs(pct) < 10:
             await self.motor_a.set_speed(0)
             await self.motor_b.set_speed(0)
         else:
-            await self.motor_a.ramp_speed2(-1*pct,500)
-            await self.motor_b.ramp_speed2(-1*pct,500)
+            #await self.motor_a.ramp_speed2(-1*pct,500)
+            #await self.motor_b.ramp_speed2(-1*pct,500)
+            await self.motor_a.set_speed(-1*pct)
+            await self.motor_b.set_speed(-1*pct)
 
-    async def run(self):
-        # await sleep(15)
-        # self.position.connect("notify", self.on_notify)
 
+    async def initialize(self):
         await self.steering_calibrate()
 
-        try:
-            pass
-            # while True:
-            #     await sleep(15)
-        except CancelledError:
-            pass
+    async def finalize(self):
+        await self.speed(0)
+        await self.steer(0)

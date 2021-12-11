@@ -20,7 +20,9 @@ git clone https://github.com/janvrany/controlminus.git
 cd controlminus
 virtualenv --system-site-packages --prompt "[control-] " -v .venv
 . .venv/bin/activate
+pip install -e ../bleak
 pip install -e ../bricknil
+pip install git+https://github.com/ldo/glibcoro.git
 ```
 
 ## Running

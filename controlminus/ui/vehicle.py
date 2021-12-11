@@ -28,9 +28,9 @@ import bricknil
 
 from gi.repository import GObject, Gtk, Gdk, Gio, GLib
 
-from controlminus import GTKEventLoopPolicy
+from controlminus import GTKEventLoopPolicy, GLibEventLoop
 from controlminus.model import Vehicle
-from controlminus.ui.widget import KeyPad, Joystick, TiltIndicator, BearingIndicator
+from controlminus.ui.widget import Joystick, TiltIndicator, BearingIndicator
 from controlminus.ui.controller import DualShock3
 
 class VehicleApp(Gtk.Application):
@@ -46,6 +46,10 @@ class VehicleApp(Gtk.Application):
         action.connect("activate", self.on_calibrate)
         self.add_action(action)
 
+        action = Gio.SimpleAction.new("debug", None)
+        action.connect("activate", self.on_debug)
+        self.add_action(action)
+
         action = Gio.SimpleAction.new("quit", None)
         action.connect("activate", self.on_quit)
         self.add_action(action)
@@ -57,15 +61,15 @@ class VehicleApp(Gtk.Application):
 
         self.builder = Gtk.Builder()
         self.builder.add_from_file("controlminus/ui/vehicle.ui")
+        self.builder.get_object("window").connect('destroy', self.on_destroy)
+
         #keypad = KeyPad()
-        keypad = Joystick()
-        keypad.set_halign(Gtk.Align.CENTER)
-        keypad.set_valign(Gtk.Align.CENTER)
-        keypad.set_hexpand(True)
-        keypad.set_vexpand(True)
-        keypad.connect("notify::x", self.on_notify_x)
-        keypad.connect("notify::y", self.on_notify_y)
-        self.builder.get_object("keypad-box").add(keypad)
+        self.keypad = Joystick()
+        self.keypad.set_halign(Gtk.Align.CENTER)
+        self.keypad.set_valign(Gtk.Align.CENTER)
+        self.keypad.set_hexpand(True)
+        self.keypad.set_vexpand(True)
+        self.builder.get_object("keypad-box").add(self.keypad)
 
         self.bearing = BearingIndicator()
         self.bearing.set_halign(Gtk.Align.CENTER)
@@ -113,13 +117,13 @@ class VehicleApp(Gtk.Application):
             def x_changed(controller, prop):
                 v = controller.get_property(prop.name)
                 v = scale(v, (0, 255), (-100, 100))
-                keypad.set_property("x", v)
+                self.keypad.set_property("x", v)
 
             def y_changed(controller, prop):
                 v = controller.get_property(prop.name)
                 v = -1 * scale(v, (0, 255), (-100, 100))
-                keypad.set_property("y", v)
-            
+                self.keypad.set_property("y", v)
+
             controller.connect("notify::abs-l-x", x_changed)
             controller.connect("notify::abs-r-y", y_changed)
         except:
@@ -129,42 +133,79 @@ class VehicleApp(Gtk.Application):
         set_event_loop_policy(GTKEventLoopPolicy())
         self.vehicle_loop = get_event_loop()
         self.vehicle_loop.be_running()
-        
+
+        def exception_handler(context):
+        	breakpoint()
+
         # Setup model
         self.vehicle = Vehicle()
+        self.vehicle.connect('connected', self.on_connected)
+        self.vehicle.connect('initialized', self.on_initialized)
+        self.vehicle.connect('disconnected', self.on_disconnected)
 
-        async def setup():
-            await bricknil.init()                        
-            for name, peripheral in self.vehicle.peripherals.items():
-                peripheral.connect('notify', self.on_vehicle_sensor_reading_changed)
-            self.on_vehicle_created()
+        # async def setup():
+        #     initialized = False
+        #     while not initialized:
+        #         try:
+        #             self.builder.get_object("content").set_visible_child(self.builder.get_object("connecting"))
+        #             await bricknil.initialize()
+        #             initialized = True
+        #         except Exception as ex:
+        #             if str(ex) == "Bluetooth adapter not found":
+        #                 self.builder.get_object("content").set_visible_child(self.builder.get_object("nobtdevice"))
+        #                 await sleep(1)
+        #             else:
+        #                 raise ex
+
+        #     for name, peripheral in self.vehicle.peripherals.items():
+        #         peripheral.connect('notify', self.on_vehicle_sensor_reading_changed)
 
         if controller != None:
-            self.vehicle_loop.create_task(controller.dispatch())    
-        self.vehicle_loop.create_task(setup())
-            
-        
+            spawn(controller.dispatch())
+        spawn(self.connect_task())
+
+    async def connect_task(self):
+        self.builder.get_object("content").set_visible_child(self.builder.get_object("connecting"))
+        await bricknil.initialize()
+
+        self.telemetry_store_map = {}
+        for name, peripheral in self.vehicle.peripherals.items():
+            peripheral_item = self.telemetry_store.append(None, [name, ''])
+            for cap in peripheral.capabilities:
+                cap_value = peripheral.value[cap] if peripheral.value != None else 'N/A'
+                cap_item = self.telemetry_store.append(peripheral_item, [ cap.name, str(cap_value) ])
+                self.telemetry_store_map[(peripheral, cap)] = cap_item
+            peripheral.connect('notify', self.on_vehicle_sensor_reading_changed)
+
     def do_activate(self):
-        window = self.builder.get_object("app-window")
+        window = self.builder.get_object("window")
         window.set_application(self)
         window.show_all()
 
-    def on_quit(self, widget, data):        
-        async def quit():
-            await bricknil.fini()
-            self.quit()            
-        self.vehicle_loop.create_task(quit())
+    def on_destroy(self, widget):
+        self.on_quit(widget, None)
+
+    def on_quit(self, widget, data):
+        async def quit_task():
+            self.builder.get_object("content").set_visible_child(self.builder.get_object("shuttingdown"))
+            await bricknil.finalize()
+            self.quit()
+        spawn(quit_task())
 
     def on_calibrate(self, widget, data):
-        run_coroutine_threadsafe(self.vehicle.steering_calibrate(), self.vehicle_loop)
+        spawn(self.vehicle.steering_calibrate())
+
+    def on_debug(self, widget, data):
+    	import pdb
+    	pdb.set_trace()
 
     def on_notify_x(self, widget, prop):
         steering = widget.get_property(prop.name)
-        run_coroutine_threadsafe(self.vehicle.steer(steering, 50), self.vehicle_loop)
+        spawn(self.vehicle.steer(steering, 50))
 
     def on_notify_y(self, widget, prop):
         speed = widget.get_property(prop.name)
-        run_coroutine_threadsafe(self.vehicle.speed(speed), self.vehicle_loop)
+        spawn(self.vehicle.speed(speed))
 
     def on_vehicle_sensor_reading_changed(self, peripheral):
         for cap in peripheral.capabilities:
@@ -176,11 +217,26 @@ class VehicleApp(Gtk.Application):
             self.pitch.set_property("angle", peripheral.sense_pos[1])
             self.roll.set_property("angle", peripheral.sense_pos[2])
 
-    def on_vehicle_created(self):
-        self.telemetry_store_map = {}
-        for name, peripheral in self.vehicle.peripherals.items():
-            peripheral_item = self.telemetry_store.append(None, [name, ''])
-            for cap in peripheral.capabilities:
-                cap_value = peripheral.value[cap] if peripheral.value != None else 'N/A'
-                cap_item = self.telemetry_store.append(peripheral_item, [ cap.name, str(cap_value) ])
-                self.telemetry_store_map[(peripheral, cap)] = cap_item
+    def on_connected(self, vehicle):
+        """
+        Called when hub is connected
+        """
+        self.builder.get_object("content").set_visible_child(self.builder.get_object("initializing"))
+
+    def on_initialized(self, vehicle):
+        """
+        Called when hub is initialized
+        """
+        self.builder.get_object("content").set_visible_child(self.builder.get_object("dashboard"))
+
+        self.keypad.connect("notify::x", self.on_notify_x)
+        self.keypad.connect("notify::y", self.on_notify_y)
+
+    def on_disconnected(self, vehicle):
+        """
+        Called when hub disconnects.
+        """
+        spawn(self.connect_task())
+
+
+
