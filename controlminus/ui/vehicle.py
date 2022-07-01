@@ -33,6 +33,18 @@ from controlminus.model import Vehicle
 from controlminus.ui.widget import Joystick, TiltIndicator, BearingIndicator
 from controlminus.ui.controller import DualShock3
 
+def scale(val, src, dst):
+    """
+    Scale the given value from the scale of src to the scale of dst.
+
+    val: float or int
+    src: tuple
+    dst: tuple
+
+    example: print(scale(99, (0.0, 99.0), (-1.0, +1.0)))
+    """
+    return round((float(val - src[0]) / (src[1] - src[0])) * (dst[1] - dst[0]) + dst[0])
+
 class VehicleApp(Gtk.Application):
     def __init__(self):
         Gtk.Application.__init__(self, application_id="org.controlminus.vehicle",flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -98,37 +110,6 @@ class VehicleApp(Gtk.Application):
         self.telemetry_store  =Gtk.TreeStore(str, str)
         telemetry.set_model(self.telemetry_store)
 
-
-        controller = None
-        try:
-            controller = DualShock3()
-            def scale(val, src, dst):
-                """
-                Scale the given value from the scale of src to the scale of dst.
-
-                val: float or int
-                src: tuple
-                dst: tuple
-
-                example: print(scale(99, (0.0, 99.0), (-1.0, +1.0)))
-                """
-                return round((float(val - src[0]) / (src[1] - src[0])) * (dst[1] - dst[0]) + dst[0])
-
-            def x_changed(controller, prop):
-                v = controller.get_property(prop.name)
-                v = scale(v, (0, 255), (-100, 100))
-                self.keypad.set_property("x", v)
-
-            def y_changed(controller, prop):
-                v = controller.get_property(prop.name)
-                v = -1 * scale(v, (0, 255), (-100, 100))
-                self.keypad.set_property("y", v)
-
-            controller.connect("notify::abs-l-x", x_changed)
-            controller.connect("notify::abs-r-y", y_changed)
-        except:
-            controller = None
-
         # Setup asyncio event loop:
         set_event_loop_policy(GTKEventLoopPolicy())
         self.vehicle_loop = get_event_loop()
@@ -142,6 +123,16 @@ class VehicleApp(Gtk.Application):
         self.vehicle.connect('connected', self.on_connected)
         self.vehicle.connect('initialized', self.on_initialized)
         self.vehicle.connect('disconnected', self.on_disconnected)
+
+
+        # Setup controller (remote)
+        self.controller = None
+        try:
+            self.controller = controller = DualShock3()
+            spawn(controller.dispatch())
+        except:
+            # No controller (remote) available
+            pass
 
         # async def setup():
         #     initialized = False
@@ -159,9 +150,6 @@ class VehicleApp(Gtk.Application):
 
         #     for name, peripheral in self.vehicle.peripherals.items():
         #         peripheral.connect('notify', self.on_vehicle_sensor_reading_changed)
-
-        if controller != None:
-            spawn(controller.dispatch())
         spawn(self.connect_task())
 
     async def connect_task(self):
@@ -199,13 +187,25 @@ class VehicleApp(Gtk.Application):
     	import pdb
     	pdb.set_trace()
 
-    def on_notify_x(self, widget, prop):
+    def on_keypad_x_changed(self, widget, prop):
         steering = widget.get_property(prop.name)
-        spawn(self.vehicle.steer(steering, 50))
+        self.vehicle.set_property('steering', steering)
 
-    def on_notify_y(self, widget, prop):
+    def on_keypad_y_changed(self, widget, prop):
         speed = widget.get_property(prop.name)
-        spawn(self.vehicle.speed(speed))
+        self.vehicle.set_property('speed', speed)
+
+    def on_remote_x_changed(self, controller, prop):
+        v = self.controller.get_property(prop.name)
+        v = scale(v, (0, 255), (-100, 100))
+        self.vehicle.set_property('steering', v)
+        self.keypad.set_property("x", v)
+
+    def on_remote_y_changed(self, controller, prop):
+        v = self.controller.get_property(prop.name)
+        v = -1 * scale(v, (0, 255), (-100, 100))
+        self.vehicle.set_property('speed', v)
+        self.keypad.set_property("y", v)
 
     def on_vehicle_sensor_reading_changed(self, peripheral):
         for cap in peripheral.capabilities:
@@ -229,8 +229,11 @@ class VehicleApp(Gtk.Application):
         """
         self.builder.get_object("content").set_visible_child(self.builder.get_object("dashboard"))
 
-        self.keypad.connect("notify::x", self.on_notify_x)
-        self.keypad.connect("notify::y", self.on_notify_y)
+        self.keypad.connect("notify::x", self.on_keypad_x_changed)
+        self.keypad.connect("notify::y", self.on_keypad_y_changed)
+
+        self.controller.connect("notify::abs-l-x", self.on_remote_x_changed)
+        self.controller.connect("notify::abs-r-y", self.on_remote_y_changed)
 
     def on_disconnected(self, vehicle):
         """
